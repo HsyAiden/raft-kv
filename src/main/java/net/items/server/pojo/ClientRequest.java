@@ -24,6 +24,9 @@ public class ClientRequest implements Serializable {
 
     public static int DEL = 2;
 
+    /**
+     * 请求类型
+     */
     private int type;
 
     private String key;
@@ -31,7 +34,7 @@ public class ClientRequest implements Serializable {
     private String value;
 
     /**
-     *
+     *  请求唯一 id,保证幂等性
      */
     private String requestId;
 }

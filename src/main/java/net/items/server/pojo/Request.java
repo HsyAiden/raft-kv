@@ -1,5 +1,8 @@
 package net.items.server.pojo;
 
+import lombok.Getter;
+import lombok.Setter;
+
 import java.util.ArrayList;
 
 /**
@@ -7,16 +10,44 @@ import java.util.ArrayList;
  * @ Date 2023/04/02
  * @ describe RPC请求体
  **/
+@Getter
+@Setter
 public class Request {
 
-    private static final int R_VOTE = 0;
+    /**
+     * 请求投票
+     */
+    public static final int R_VOTE = 0;
+    /**
+     * 附加日志
+     */
+    public static final int A_ENTRIES = 1;
+    /**
+     * 客户端
+     */
+    public static final int CLIENT_REQ = 2;
+    /**
+     * 配置变更. add
+     */
+    public static final int CHANGE_CONFIG_ADD = 3;
+    /**
+     * 配置变更. remove
+     */
+    public static final int CHANGE_CONFIG_REMOVE = 4;
 
-    private static final int A_ENTRIES = 1;
+    /**
+     * 请求类型
+     */
+    private int cmd = -1;
 
-    private static final int CLIENT_REQ = 2;
+    /**
+     * 附带请求参数
+     */
+    private Object obj;
 
-    private static final int CHANGE_CONFIG_ADD = 3;
-
-    private static final int CHANGE_CONFIG_REMOVE = 4;
+    /**
+     * 目标地址
+     */
+    private String url;
 
 }
