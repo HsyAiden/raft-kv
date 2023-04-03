@@ -10,7 +10,6 @@
 
     <name>raft-kv</name>
 
-
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>1.8</maven.compiler.source>
@@ -50,6 +49,19 @@
                     <groupId>org.slf4j</groupId>
                 </exclusion>
             </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>fastjson</artifactId>
+            <version>1.2.49</version>
+        </dependency>
+
+        <!-- 本地存储 -->
+        <dependency>
+            <groupId>org.rocksdb</groupId>
+            <artifactId>rocksdbjni</artifactId>
+            <version>5.14.3</version>
         </dependency>
 
     </dependencies>
