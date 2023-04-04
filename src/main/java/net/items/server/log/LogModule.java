@@ -53,7 +53,7 @@ public class LogModule {
             success = file.mkdirs();
         }
         if (success) {
-            log.warn("make a new dir : " + logsDir);
+            log.info("make a new dir : " + logsDir);
         }
         try {
             // 使用RocksDB打开日志文件
