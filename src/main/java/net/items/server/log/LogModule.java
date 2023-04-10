@@ -63,6 +63,15 @@ public class LogModule {
         }
     }
 
+    public static LogModule getInstance() {
+        return LogModuleLazyHolder.INSTANCE;
+    }
+
+    private static class LogModuleLazyHolder {
+
+        private static final LogModule INSTANCE = new LogModule();
+    }
+
     public void write(LogEntry logEntry) {
         boolean success = false;
         try {
@@ -79,6 +88,63 @@ public class LogModule {
             }
             lock.unlock();
         }
+    }
+
+    /**
+     * 根据索引读取日志
+     * @param index
+     * @return 日志条目 LogEntry 或 null
+     */
+    public LogEntry read(Long index) {
+        try {
+            byte[] result = logDb.get(convert(index));
+            if (result == null) {
+                return null;
+            }
+            return JSON.parseObject(result, LogEntry.class);
+        } catch (RocksDBException e) {
+            log.warn(e.getMessage(), e);
+        }
+        return null;
+    }
+
+    /**
+     * 删除index在[startIndex, lastIndex]内的日志
+     * @param startIndex
+     */
+    public void removeOnStartIndex(Long startIndex) {
+        boolean success = false;
+        int count = 0;
+        try {
+            //lock.tryLock(3000, MILLISECONDS);
+            lock.lock();
+            for (long i = startIndex; i <= getLastIndex(); i++) {
+                logDb.delete(String.valueOf(i).getBytes());
+                ++count;
+            }
+            success = true;
+            log.warn("rocksDB removeOnStartIndex success, count={} startIndex={}, lastIndex={}", count, startIndex, getLastIndex());
+        } catch (RocksDBException e) {
+            log.warn(e.getMessage());
+        } finally {
+            if (success) {
+                updateLastIndex(getLastIndex() - count);
+            }
+            lock.unlock();
+        }
+    }
+
+    public LogEntry getLast() {
+        try {
+            byte[] result = logDb.get(convert(getLastIndex()));
+            if (result == null) {
+                return null;
+            }
+            return JSON.parseObject(result, LogEntry.class);
+        } catch (RocksDBException e) {
+            log.error("RocksDB getLast error", e);
+        }
+        return null;
     }
 
     /**
@@ -107,5 +173,10 @@ public class LogModule {
             log.error("RocksDB updateLastIndex error", e);
         }
     }
+
+    private byte[] convert(Long key) {
+        return key.toString().getBytes();
+    }
+
 
 }

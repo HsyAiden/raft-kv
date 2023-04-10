@@ -1,5 +1,8 @@
 package net.items.server.pojo;
 
+import lombok.Builder;
+import lombok.Getter;
+import lombok.Setter;
 import net.items.server.log.LogEntry;
 
 /**
@@ -7,6 +10,9 @@ import net.items.server.log.LogEntry;
  * @ Date 2023/04/02
  * @ describe
  **/
+@Getter
+@Setter
+@Builder
 public class AppendParam {
 
     /**

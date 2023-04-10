@@ -56,11 +56,6 @@ public class StateMachine {
         return StateMachineLazyHolder.INSTANCE;
     }
 
-    public void destroy() throws Throwable {
-        machineDb.close();
-        log.info("destroy success");
-    }
-
     private static class StateMachineLazyHolder {
         private static final StateMachine INSTANCE = new StateMachine();
     }

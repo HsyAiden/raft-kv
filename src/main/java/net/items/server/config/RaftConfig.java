@@ -12,7 +12,7 @@ public class RaftConfig {
     /**
      * 心跳检测间隔时间
      */
-    public static final int heatBeatInterval = 300;
+    public static final int heartBeatInterval = 300;
 
     /**
      * 选举触发时间
