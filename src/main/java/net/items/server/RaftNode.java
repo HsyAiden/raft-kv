@@ -1,5 +1,6 @@
 package net.items.server;
 
+import io.netty.util.internal.StringUtil;
 import lombok.extern.slf4j.Slf4j;
 import net.items.server.config.RaftConfig;
 import net.items.server.constant.NodeStatus;
@@ -14,6 +15,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static net.items.server.constant.NodeStatus.*;
@@ -105,6 +108,9 @@ public class RaftNode {
 
     ScheduledFuture<?> heartBeatFuture;
 
+    /** 处理选举请求的锁 */
+    private final ReentrantLock voteLock = new ReentrantLock();
+
     /**
      * RPC 客户端
      */
@@ -166,6 +172,63 @@ public class RaftNode {
         ss.scheduleAtFixedRate(electionTask, 3000, 100, TimeUnit.MILLISECONDS);
 
     }
+
+    /**
+     * 处理来自其他节点的投票请求
+     */
+    public VoteResult requestVote(VoteParam param) {
+        updatePreElectionTime();
+
+        try {
+            VoteResult.Builder builder = VoteResult.newBuilder();
+            voteLock.lock();
+
+            // 对方任期没有自己新
+            if (param.getTerm() < term) {
+                // 返回投票结果的同时更新对方的term
+                log.info("decline to vote for candidate {} because of smaller term", param.getCandidateAddr());
+                return builder.term(term).voteGranted(false).build();
+            }
+
+            if ((StringUtil.isNullOrEmpty(votedFor) || votedFor.equals(param.getCandidateAddr()))) {
+                if (logModule.getLast() != null) {
+                    // 对方没有自己新
+                    if (logModule.getLast().getTerm() > param.getLastLogTerm()) {
+                        log.info("decline to vote for candidate {} because of older log term", param.getCandidateAddr());
+                        return VoteResult.fail();
+                    }
+                    // 对方没有自己新
+                    if (logModule.getLastIndex() > param.getLastLogIndex()) {
+                        log.info("node decline to vote for candidate {} because of older log index", param.getCandidateAddr());
+                        return VoteResult.fail();
+                    }
+                }
+
+                // 切换状态
+                status = FOLLOWER;
+                stopHeartBeat();
+
+                // 更新
+                leader = param.getCandidateAddr();
+                term = param.getTerm();
+                votedFor = param.getCandidateAddr();
+                log.info("vote for candidate: {}", param.getCandidateAddr());
+                // 返回成功
+                return builder.term(term).voteGranted(true).build();
+            }
+
+            log.info("node decline to vote for candidate {} because there is no vote available", param.getCandidateAddr());
+            return builder.term(term).voteGranted(false).build();
+
+        } finally {
+            updatePreElectionTime();
+            voteLock.unlock();
+        }
+    }
+
+
+
+
 
     class ElectionTask implements Runnable{
         @Override
