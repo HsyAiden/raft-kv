@@ -1,5 +1,6 @@
 package net.items.server.constant;
 
+import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -10,6 +11,7 @@ import lombok.Setter;
  **/
 @Getter
 @Setter
+@Builder
 public class Command {
     /**
      * 操作类型

@@ -42,4 +42,10 @@ public class ClientResponse {
     public static ClientResponse fail(Object result) {
         return new ClientResponse(-1, result);
     }
+    public static ClientResponse fail() {
+        return new ClientResponse(-1, null);
+    }
+    public static ClientResponse redirect(String addr) {
+        return new ClientResponse(1, addr);
+    }
 }

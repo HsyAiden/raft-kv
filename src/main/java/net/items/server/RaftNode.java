@@ -3,6 +3,8 @@ package net.items.server;
 import io.netty.util.internal.StringUtil;
 import lombok.extern.slf4j.Slf4j;
 import net.items.server.config.RaftConfig;
+import net.items.server.constant.Command;
+import net.items.server.constant.CommandType;
 import net.items.server.constant.NodeStatus;
 import net.items.server.db.StateMachine;
 import net.items.server.log.LogEntry;
@@ -15,7 +17,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -111,6 +112,9 @@ public class RaftNode {
     /** 处理选举请求的锁 */
     private final ReentrantLock voteLock = new ReentrantLock();
 
+    /** 处理日志请求的锁 */
+    private final ReentrantLock appendLock = new ReentrantLock();
+
     /**
      * RPC 客户端
      */
@@ -120,6 +124,12 @@ public class RaftNode {
      * RPC 服务端
      */
     private RpcServer rpcServer;
+
+    /** 一致性信号 */
+    private final Integer consistencySignal = 1;
+
+    /** 等待被一致性信号唤醒的线程 */
+    Thread waitThread;
 
     private boolean leaderInitializing;
 
@@ -224,6 +234,208 @@ public class RaftNode {
             updatePreElectionTime();
             voteLock.unlock();
         }
+    }
+
+    /**
+     * 处理来自其它节点的非选举请求（心跳或追加日志）
+     */
+    public AppendResult appendEntries(AppendParam param){
+        updatePreElectionTime();
+        preHeartBeatTime = System.currentTimeMillis();
+        AppendResult result = AppendResult.fail();
+        try {
+            appendLock.lock();
+            result.setTerm(term);
+
+            // 请求方任期较低，直接拒绝
+            if (param.getTerm() < term) {
+                return result;
+            }
+
+            leader = param.getLeaderId();
+            votedFor = "";
+
+            // 收到了新领导者的 append entry 请求，转为跟随者
+            if (status != FOLLOWER) {
+                log.info("node {} become FOLLOWER, term : {}, param Term : {}",
+                        myAddr, term, param.getTerm());
+                status = FOLLOWER;
+                stopHeartBeat();
+            }
+
+            // 更新term
+            term = param.getTerm();
+
+            //心跳
+            if (param.getEntries() == null || param.getEntries().length == 0) {
+//                log.info("receive heartbeat from node {}, term : {}",
+//                        param.getLeaderId(), param.getTerm());
+                // 旧日志提交
+                long nextCommit = getCommitIndex() + 1;
+                while (nextCommit <= param.getLeaderCommit()
+                        && logModule.read(nextCommit) != null){
+                    stateMachine.apply(logModule.read(nextCommit));
+                    nextCommit++;
+                }
+                setCommitIndex(nextCommit - 1);
+                return AppendResult.newBuilder().term(term).success(true).build();
+            }
+
+            // 1. preLog匹配判断
+            if (logModule.getLastIndex() < param.getPrevLogIndex()){
+                // 跟随者的最大日志索引小于请求体的 preLogIndex，无法通过日志匹配
+                return result;
+            } else if (param.getPrevLogIndex() >= 0) {
+                // preLogIndex 在跟随者的日志索引范围内，判断该日志的任期号是否相同
+                LogEntry preEntry = logModule.read(param.getPrevLogIndex());
+                if (preEntry.getTerm() != param.getPreLogTerm()) {
+                    // 任期号不匹配，领导者将选取更早的 preLog 并重试
+                    return result;
+                }
+            } // else ... 当 preLogIndex 是 -1 时，说明从第一个日志开始复制，此时必然是能够匹配的
+
+            // 2. 清理多余的旧日志
+            long curIdx = param.getPrevLogIndex() + 1;
+            if (logModule.read(curIdx) != null){
+                // 只保留 [0..preLogIndex] 内的日志条目
+                logModule.removeOnStartIndex(curIdx);
+            }
+
+            // 3. 追加日志到本地文件
+            LogEntry[] entries = param.getEntries();
+            for (LogEntry logEntry : entries) {
+                logModule.write(logEntry);
+            }
+
+            // 4. 旧日志提交
+            long nextCommit = getCommitIndex() + 1;
+            while (nextCommit <= param.getLeaderCommit()){
+                stateMachine.apply(logModule.read(nextCommit));
+                nextCommit++;
+            }
+            setCommitIndex(nextCommit - 1);
+
+            // 5. 同意append entry请求
+            result.setSuccess(true);
+            return result;
+
+        } finally {
+            updatePreElectionTime();
+            appendLock.unlock();
+        }
+    }
+
+    /**
+     * 处理客户端请求
+     */
+    public synchronized ClientResponse propose(ClientRequest request){
+        log.info("handlerClientRequest handler {} operation, key: [{}], value: [{}]",
+                ClientRequest.Type.value(request.getType()), request.getKey(), request.getValue());
+
+        if (status == FOLLOWER) {
+            log.warn("redirect to leader: {}", leader);
+            return redirect(request);
+        } else if (status == CANDIDATE){
+            log.warn("candidate declines client request: {} ", request);
+            return ClientResponse.fail();
+        }
+
+        if (leaderInitializing){
+            log.error("the leader is initializing, please try again later");
+            return ClientResponse.fail();
+        }
+
+        // 读操作
+        if (request.getType() == ClientRequest.GET) {
+            synchronized (consistencySignal){
+                try {
+                    // 等待一个心跳周期，以保证当前领导者有效
+                    waitThread = Thread.currentThread();
+                    consistencySignal.wait();
+                } catch (InterruptedException e) {
+                    log.error("thread has been interrupted.");
+                    waitThread = null;
+                    return ClientResponse.fail();
+                }
+                waitThread = null;
+                String value = stateMachine.getString(request.getKey());
+                if (value != null) {
+                    return ClientResponse.ok(value);
+                }
+                return ClientResponse.ok(null);
+            }
+        }
+
+        // 幂等性判断
+        if (stateMachine.getString(request.getRequestId()) != null){
+            log.info("request have been ack");
+            return ClientResponse.ok();
+        }
+
+        // 写操作
+        LogEntry logEntry = LogEntry.builder()
+                .command(Command.builder()
+                        .key(request.getKey())
+                        .value(request.getValue())
+                        .type(CommandType.PUT)
+                        .build())
+                .term(term)
+                .requestId(request.getRequestId())
+                .build();
+
+        // 写入本地日志并更新logEntry的index
+        logModule.write(logEntry);
+        log.info("write logModule success, logEntry info : {}, log index : {}", logEntry, logEntry.getIndex());
+
+        List<Future<Boolean>> futureList = new ArrayList<>();
+        CountDownLatch latch = new CountDownLatch(peerAddrs.size());
+
+        //  复制到其他机器
+        for (String peer : peerAddrs) {
+            // 并行发起 RPC 复制并获取响应
+            futureList.add(replication(peer, logEntry, latch));
+        }
+
+        try {
+            // 等待 replication 中的线程执行完毕
+            latch.await(6000, MILLISECONDS);
+        } catch (InterruptedException e) {
+            log.error(e.getMessage(), e);
+        }
+
+        // 统计日志复制结果
+        int success = getReplicationResult(futureList);
+
+        if (success * 2 >= peerAddrs.size()) {
+            // 更新
+            setCommitIndex(logEntry.getIndex());
+            //  应用到状态机
+            stateMachine.apply(logEntry);
+            log.info("successfully commit, logEntry info: {}", logEntry);
+            // 返回成功.
+            return ClientResponse.ok();
+        } else {
+            // 提交失败，删除日志
+            logModule.removeOnStartIndex(logEntry.getIndex());
+            log.warn("commit fail, logEntry info : {}", logEntry);
+            // 响应客户端
+            return ClientResponse.fail();
+        }
+    }
+
+
+    /**
+     * 转发给leader处理（重定向）
+     * @param request
+     * @return
+     */
+    public ClientResponse redirect(ClientRequest request){
+        if (status == FOLLOWER && !StringUtil.isNullOrEmpty(leader)){
+            return ClientResponse.redirect(leader);
+        } else {
+            return ClientResponse.fail();
+        }
+
     }
 
 

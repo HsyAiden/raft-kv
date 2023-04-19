@@ -37,4 +37,23 @@ public class ClientRequest implements Serializable {
      *  请求唯一 id,保证幂等性
      */
     private String requestId;
+
+    public enum Type {
+        /** 1111 */
+        PUT(0), GET(1);
+        int code;
+
+        Type(int code) {
+            this.code = code;
+        }
+
+        public static Type value(int code ) {
+            for (Type type : values()) {
+                if (type.code == code) {
+                    return type;
+                }
+            }
+            return null;
+        }
+    }
 }
